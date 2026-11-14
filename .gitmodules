@@ -1,0 +1,9 @@
+[submodule "ppanel-node"]
+	path = ppanel-node
+	url = git@github.com:jaoau0803/ppanel-node.git
+[submodule "frontend"]
+	path = frontend
+	url = git@github.com:jaoau0803/frontend.git
+[submodule "backend"]
+	path = backend
+	url = git@github.com:jaoau0803/backend.git
