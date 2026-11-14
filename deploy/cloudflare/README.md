@@ -4,9 +4,11 @@
 
 ## 1. 创建资源
 
-在 Cloudflare 中创建两个 **Pages Direct Upload** 项目（不是 Workers 项目），例如 `ppanel-user` 和 `ppanel-admin`，分别绑定用户端和管理端域名。不要再为同一项目开启另一套 Git 自动部署。
+**无需手动创建 Pages 项目或提前上传编译产物。** Actions 构建成功后会查询项目，不存在时通过 `wrangler pages project create` 自动创建 Direct Upload 项目，再上传静态资源及 Functions。
 
-将两个项目的生产分支设为 `main`（或与 `CF_PRODUCTION_BRANCH` 一致）。Wrangler 根据分支判断生产/预览，脚本参数本身不能改变项目的生产分支配置。
+默认名称为用户端 `ppanel-user`、管理端 `ppanel-admin`；可通过 `CF_USER_PROJECT` / `CF_ADMIN_PROJECT` 覆盖。项目名和 `pages.dev` 子域可能存在可用性限制，若默认名称不可用，请配置自己的唯一名称。项目创建后可在 Cloudflare 控制台绑定自定义域名，不要再为同一项目开启另一套 Git 自动部署。
+
+新项目的生产分支使用 `CF_PRODUCTION_BRANCH`（默认 `main`）。已有项目会检查生产分支是否匹配，不匹配则报错，不修改或覆盖项目设置。Wrangler 根据分支判断生产/预览。首次运行 Preview 也会创建项目，但仅上传 Preview 部署；生产站点需运行 Production 部署后才有内容。
 
 后端必须是 Cloudflare 能访问的 HTTPS 服务，不能指回前端域名。它仍需自行做认证、管理权限校验和限流。API 路径保持 `/v1/...`，`API_BASE_URL` 只能填写 origin，不包含 `/v1`。
 
@@ -37,7 +39,7 @@ CF_PAGES_PROJECT=ppanel-user \
 bun run deploy.ts user production --dry-run
 ```
 
-`--dry-run` 实际构建目标应用并编译 Functions，但不上传，不需要 Cloudflare 凭据。应用构建包含上游的 TypeScript 检查。
+`--dry-run` 实际构建目标应用并编译 Functions，但不查询或创建云端项目，也不上传，不需要 Cloudflare 凭据。应用构建包含上游的 TypeScript 检查。
 
 部署前通过安全的 shell 环境或密码管理器设置 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，不要写入配置或提交仓库。API Token 使用限定账户的 **Cloudflare Pages: Edit** 权限。
 
@@ -65,7 +67,7 @@ bun run deploy.ts user preview
 | 第一个参数 | `user` 或 `admin` |
 | 第二个参数 | `production` 或 `preview` |
 | `API_BASE_URL` | 必填，后端 HTTPS origin；构建暂存配置中的运行时变量 |
-| `CF_PAGES_PROJECT` | 必填，已存在的 Pages 项目名 |
+| `CF_PAGES_PROJECT` | 可选，默认 `ppanel-user` 或 `ppanel-admin`；不存在时自动创建 |
 | `SITE_ORIGIN` | 建议设置，用于检测明显的代理循环；不能识别所有域名别名循环 |
 | `CF_PRODUCTION_BRANCH` | 默认 `main`，必须匹配 Pages 项目设置 |
 | `CF_PREVIEW_BRANCH` | Preview 必填，且不能与生产分支相同 |
@@ -90,8 +92,8 @@ bun run deploy.ts user preview
 | Variable | 例子 |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID |
-| `CF_USER_PROJECT` | `ppanel-user` |
-| `CF_ADMIN_PROJECT` | `ppanel-admin` |
+| `CF_USER_PROJECT` | 可选，默认 `ppanel-user`；建议改为带个人/组织前缀的名称 |
+| `CF_ADMIN_PROJECT` | 可选，默认 `ppanel-admin`；建议改为带个人/组织前缀的名称 |
 | `CF_USER_ORIGIN` | `https://panel.example.com` |
 | `CF_ADMIN_ORIGIN` | `https://admin.example.com` |
 | `API_BASE_URL` | 当前环境后端，例如 `https://staging-api.example.com` |
