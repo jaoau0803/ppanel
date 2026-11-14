@@ -1,0 +1,92 @@
+name: Release Node
+
+on:
+  push:
+    tags: ['node-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Node version: 1.2.3 or 1.2.3-rc.1 (optional node-v prefix)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-node
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: node-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Resolve version and check release does not exist
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m unittest discover -s deploy/node -p 'test_*.py'
+          python3 deploy/node/release.py
+          source "$GITHUB_ENV"
+          # Fail closed on API errors; never overwrite an existing release.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > existing-tags
+          if grep -Fxq "$NODE_TAG" existing-tags; then
+            echo "Release $NODE_TAG already exists; use a new version." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" != tag ]]; then
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$NODE_TAG" > /dev/null 2> tag-error; then
+              echo 'Tag already exists; dispatch from that tag or use a new version.' >&2
+              exit 1
+            else
+              grep -q 'HTTP 404' tag-error || { cat tag-error >&2; exit 1; }
+            fi
+          fi
+      - name: Checkout recorded node commit
+        env:
+          GH_TOKEN: ${{ secrets.NODE_READ_TOKEN || github.token }}
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" submodule update --init ppanel-node
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ppanel-node/go.mod
+          cache-dependency-path: ppanel-node/go.sum
+      - name: Test node
+        working-directory: ppanel-node
+        run: |
+          go test -race -timeout 5m ./...
+          (cd pkg/nowhere && go test -race -timeout 5m ./...)
+      - name: Build Linux archives
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+        run: |
+          mkdir -p dist package
+          cp ppanel-node/LICENSE ppanel-node/THIRD_PARTY_NOTICES.md package/
+          for data in geoip geosite; do
+            curl -fSL --retry 3 --max-time 300 "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/$data.dat" -o "package/$data.dat"
+          done
+          for arch in amd64 arm64 s390x; do
+            (cd ppanel-node && GOARCH="$arch" go build -trimpath -ldflags "-s -w -buildid= -X github.com/perfect-panel/ppanel-node/cmd.version=$NODE_TAG" -o ../package/ppnode .)
+            tar -czf "dist/ppanel-node-linux-$arch.tar.gz" -C package ppnode geoip.dat geosite.dat LICENSE THIRD_PARTY_NOTICES.md
+          done
+          cp deploy/node/install.sh dist/install.sh
+          (cd dist && sha256sum *.tar.gz install.sh > SHA256SUMS)
+          printf 'Parent commit: %s\nNode commit: %s\nGeodata: Loyalsoldier/v2ray-rules-dat release branch at build time.\n' "$GITHUB_SHA" "$(git -C ppanel-node rev-parse HEAD)" > dist/SOURCE.txt
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--latest=false)
+          if [[ "$NODE_PRERELEASE" == true ]]; then args+=(--prerelease); fi
+          gh release create "$NODE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "PPanel Node $NODE_TAG" --notes-file dist/SOURCE.txt --draft "${args[@]}"
+          gh release edit "$NODE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          echo "Published $NODE_TAG: https://github.com/$GITHUB_REPOSITORY/releases/tag/$NODE_TAG" >> "$GITHUB_STEP_SUMMARY"
