@@ -25,6 +25,11 @@ describe("deployment validation", () => {
   test("accepts an HTTPS backend origin", () => {
     expect(validateBackend("https://api.example.com/")).toBe("https://api.example.com");
   });
+  test("explains missing and malformed backend configuration", () => {
+    expect(() => validateBackend("")).toThrow("API_BASE_URL is required");
+    expect(() => validateBackend("   ")).toThrow("API_BASE_URL is required");
+    expect(() => validateBackend("not-a-url")).toThrow("API_BASE_URL must be a valid HTTPS origin");
+  });
   test("rejects unsafe or ambiguous backends", () => {
     for (const value of ["", "http://api.example.com", "https://api.example.com/v1", "https://user:pass@api.example.com", "https://api.example.com/?x=1", "https://api.example.com/#hash"]) {
       expect(() => validateBackend(value)).toThrow();

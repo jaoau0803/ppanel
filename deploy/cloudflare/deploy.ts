@@ -40,7 +40,15 @@ export async function ensureProject(
 }
 
 export function validateBackend(value: string, targetOrigin?: string): string {
-  const url = new URL(value);
+  if (!value.trim()) {
+    throw new Error("API_BASE_URL is required. Set it as a GitHub Actions Variable (not Secret) in the selected cloudflare-preview or cloudflare-production Environment, or in repository Actions Variables.");
+  }
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("API_BASE_URL must be a valid HTTPS origin, for example https://api.example.com");
+  }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
     throw new Error("API_BASE_URL must be an HTTPS origin without credentials, path, query or fragment");
   }

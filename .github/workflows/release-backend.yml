@@ -1,0 +1,101 @@
+name: Release Backend Image
+
+on:
+  push:
+    tags: ['backend-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version: 1.2.3, 1.2.3-beta.1 or 1.2.3-rc.1'
+        required: true
+        type: string
+      publish_latest:
+        description: Also update latest (stable releases only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Serialize releases so floating tags cannot be updated concurrently.
+concurrency:
+  group: release-backend-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: backend-release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout recorded backend commit
+        env:
+          GH_TOKEN: ${{ secrets.BACKEND_READ_TOKEN || github.token }}
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" submodule update --init backend
+      - name: Resolve release metadata
+        id: meta
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+        run: |
+          export BACKEND_SHA="$(git -C backend rev-parse HEAD)"
+          echo "BACKEND_SHA=$BACKEND_SHA" >> "$GITHUB_ENV"
+          python3 -m unittest discover -s deploy/backend -p 'test_*.py'
+          python3 deploy/backend/metadata.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test backend
+        working-directory: backend
+        run: go test ./...
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            CHANNEL=${{ steps.meta.outputs.channel }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ env.BACKEND_SHA }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
+            io.ppanel.parent.revision=${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Release summary
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo '## Backend image published'
+            printf '\n- Image: `%s:%s`\n' "$IMAGE" "$VERSION"
+            printf '\n- Immutable pull reference: `%s@%s`\n' "$IMAGE" "$DIGEST"
+            printf '\n- Backend commit: `%s`\n' "$BACKEND_SHA"
+            echo ''
+            echo 'First publication: open GitHub Package settings and change visibility to Public to allow anonymous pulls.'
+            echo 'No backend deployment or database migration is performed by this workflow.'
+          } >> "$GITHUB_STEP_SUMMARY"
